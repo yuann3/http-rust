@@ -65,6 +65,8 @@ fn handle_connection(mut stream: TcpStream) -> Result<(), Box<dyn error::Error>>
                         send_response(&mut stream, "500 Internal Server Error", "text/plain", "")?;
                     }
                 }
+            } else {
+                send_response(&mut stream, "404 Not Found", "text/plain", "")?;
             }
         }
         ("GET", "/user-agent") => {
