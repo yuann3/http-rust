@@ -1,21 +1,23 @@
 use std::{
     collections::HashMap,
-    error,
+    env, error,
+    fs::{self},
     io::{BufRead, BufReader, Write},
     net::{TcpListener, TcpStream},
+    path::Path,
 };
 
 fn main() -> Result<(), Box<dyn error::Error>> {
+    // Listen to TCP Stream
     let listener = TcpListener::bind("127.0.0.1:4221")?;
     println!("Server listening on port 4221");
 
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
-                println!("Accepted new connection");
-                std::thread::spawn(|| {
+                std::thread::spawn(move || {
                     if let Err(e) = handle_connection(stream) {
-                        eprintln!("Error: {}", e);
+                        eprintln!("Error handling connection: {}", e);
                     }
                 });
             }
@@ -42,6 +44,28 @@ fn handle_connection(mut stream: TcpStream) -> Result<(), Box<dyn error::Error>>
         ("GET", path) if path.starts_with("/echo/") => {
             let echo_string = &path[6..];
             send_response(&mut stream, "200 OK", "text/plain", echo_string)?;
+        }
+        ("GET", path) if path.starts_with("/files/") => {
+            let filename = &path[7..];
+            let directory = env::args().nth(2).unwrap_or_else(|| ".".to_string());
+            let file_path = Path::new(&directory).join(filename);
+
+            if file_path.is_file() {
+                match fs::read(&file_path) {
+                    Ok(content) => {
+                        send_response(
+                            &mut stream,
+                            "200 OK",
+                            "application/octet-stream",
+                            &String::from_utf8_lossy(&content),
+                        )?;
+                    }
+                    Err(e) => {
+                        eprintln!("Error reading file: {}", e);
+                        send_response(&mut stream, "500 Internal Server Error", "text/plain", "")?;
+                    }
+                }
+            }
         }
         ("GET", "/user-agent") => {
             let user_agent = headers.get("User-Agent").map(String::as_str).unwrap_or("");
