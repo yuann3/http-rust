@@ -13,7 +13,11 @@ fn main() -> Result<(), Box<dyn error::Error>> {
         match stream {
             Ok(stream) => {
                 println!("Accepted new connection");
-                handle_connection(stream)?;
+                std::thread::spawn(|| {
+                    if let Err(e) = handle_connection(stream) {
+                        eprintln!("Error: {}", e);
+                    }
+                });
             }
             Err(e) => eprintln!("Error: {}", e),
         }
