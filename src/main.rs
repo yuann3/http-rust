@@ -1,17 +1,15 @@
 use std::{
     collections::HashMap,
     env, error,
-    fs::{self},
-    io::{BufRead, BufReader, Write},
+    fs::{self, File},
+    io::{BufRead, BufReader, Read, Write},
     net::{TcpListener, TcpStream},
     path::Path,
 };
 
 fn main() -> Result<(), Box<dyn error::Error>> {
-    // Listen to TCP Stream
     let listener = TcpListener::bind("127.0.0.1:4221")?;
     println!("Server listening on port 4221");
-
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
@@ -28,17 +26,21 @@ fn main() -> Result<(), Box<dyn error::Error>> {
 }
 
 fn handle_connection(mut stream: TcpStream) -> Result<(), Box<dyn error::Error>> {
-    let buf_reader = BufReader::new(&mut stream);
-    let request: Vec<_> = buf_reader
-        .lines()
-        .map(|result| result.unwrap())
-        .take_while(|line| !line.is_empty())
-        .collect();
+    let mut buf_reader = BufReader::new(&stream);
+    let mut request_line = String::new();
+    buf_reader.read_line(&mut request_line)?;
 
-    let request_line = &request[0];
-    let (method, path, _) = parse_request_line(request_line);
+    let (method, path, _) = parse_request_line(&request_line);
+    let headers = parse_headers(&mut buf_reader);
 
-    let headers = parse_headers(&request[1..]);
+    let mut body = Vec::new();
+    if method == "POST" {
+        if let Some(content_length) = headers.get("Content-Length") {
+            let content_length: usize = content_length.parse()?;
+            body = vec![0; content_length];
+            buf_reader.read_exact(&mut body)?;
+        }
+    }
 
     match (method.as_str(), path.as_str()) {
         ("GET", path) if path.starts_with("/echo/") => {
@@ -46,28 +48,10 @@ fn handle_connection(mut stream: TcpStream) -> Result<(), Box<dyn error::Error>>
             send_response(&mut stream, "200 OK", "text/plain", echo_string)?;
         }
         ("GET", path) if path.starts_with("/files/") => {
-            let filename = &path[7..];
-            let directory = env::args().nth(2).unwrap_or_else(|| ".".to_string());
-            let file_path = Path::new(&directory).join(filename);
-
-            if file_path.is_file() {
-                match fs::read(&file_path) {
-                    Ok(content) => {
-                        send_response(
-                            &mut stream,
-                            "200 OK",
-                            "application/octet-stream",
-                            &String::from_utf8_lossy(&content),
-                        )?;
-                    }
-                    Err(e) => {
-                        eprintln!("Error reading file: {}", e);
-                        send_response(&mut stream, "500 Internal Server Error", "text/plain", "")?;
-                    }
-                }
-            } else {
-                send_response(&mut stream, "404 Not Found", "text/plain", "")?;
-            }
+            handle_get_file(&mut stream, &path)?;
+        }
+        ("POST", path) if path.starts_with("/files/") => {
+            handle_post_file(&mut stream, &path, &body)?;
         }
         ("GET", "/user-agent") => {
             let user_agent = headers.get("User-Agent").map(String::as_str).unwrap_or("");
@@ -80,7 +64,47 @@ fn handle_connection(mut stream: TcpStream) -> Result<(), Box<dyn error::Error>>
             send_response(&mut stream, "404 Not Found", "text/plain", "404 Not Found")?;
         }
     }
+    Ok(())
+}
 
+fn handle_get_file(stream: &mut TcpStream, path: &str) -> Result<(), Box<dyn error::Error>> {
+    let filename = &path[7..];
+    let directory = env::args().nth(2).unwrap_or_else(|| ".".to_string());
+    let file_path = Path::new(&directory).join(filename);
+    if file_path.is_file() {
+        match fs::read(&file_path) {
+            Ok(content) => {
+                send_response(
+                    stream,
+                    "200 OK",
+                    "application/octet-stream",
+                    &String::from_utf8_lossy(&content),
+                )?;
+            }
+            Err(e) => {
+                eprintln!("Error reading file: {}", e);
+                send_response(stream, "500 Internal Server Error", "text/plain", "")?;
+            }
+        }
+    } else {
+        send_response(stream, "404 Not Found", "text/plain", "")?;
+    }
+    Ok(())
+}
+
+fn handle_post_file(
+    stream: &mut TcpStream,
+    path: &str,
+    body: &[u8],
+) -> Result<(), Box<dyn error::Error>> {
+    let filename = &path[7..];
+    let directory = env::args().nth(2).unwrap_or_else(|| ".".to_string());
+    let file_path = Path::new(&directory).join(filename);
+
+    let mut file = File::create(file_path)?;
+    file.write_all(body)?;
+
+    send_response(stream, "201 Created", "text/plain", "")?;
     Ok(())
 }
 
@@ -92,9 +116,11 @@ fn parse_request_line(request_line: &str) -> (String, String, String) {
     (method, path, version)
 }
 
-fn parse_headers(header_lines: &[String]) -> HashMap<String, String> {
-    header_lines
-        .iter()
+fn parse_headers(buf_reader: &mut BufReader<&TcpStream>) -> HashMap<String, String> {
+    buf_reader
+        .lines()
+        .map(|line| line.unwrap())
+        .take_while(|line| !line.is_empty())
         .filter_map(|line| {
             let mut parts = line.splitn(2, ": ");
             Some((parts.next()?.to_string(), parts.next()?.trim().to_string()))
