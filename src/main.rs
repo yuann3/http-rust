@@ -1,3 +1,5 @@
+use flate2::write::GzEncoder;
+use flate2::Compression;
 use std::{
     collections::HashMap,
     env, error,
@@ -182,13 +184,19 @@ fn send_response_with_encoding(
 ) -> Result<(), Box<dyn error::Error>> {
     let mut response = format!("HTTP/1.1 {}\r\nContent-Type: {}\r\n", status, content_type);
 
+    let body: Vec<u8>;
     if use_gzip {
+        let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+        encoder.write_all(content.as_bytes())?;
+        body = encoder.finish()?;
         response.push_str("Content-Encoding: gzip\r\n");
+    } else {
+        body = content.as_bytes().to_vec();
     }
 
-    response.push_str(&format!("Content-Length: {}\r\n\r\n", content.len()));
-    response.push_str(content);
+    response.push_str(&format!("Content-Length: {}\r\n\r\n", body.len()));
 
     stream.write_all(response.as_bytes())?;
+    stream.write_all(&body)?;
     Ok(())
 }
