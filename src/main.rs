@@ -25,6 +25,13 @@ fn main() -> Result<(), Box<dyn error::Error>> {
     Ok(())
 }
 
+fn client_accept_gzip(headers: &HashMap<String, String>) -> bool {
+    headers
+        .get("Accept-Encoding")
+        .map(|encodings| encodings.contains("gzip"))
+        .unwrap_or(false)
+}
+
 fn handle_connection(mut stream: TcpStream) -> Result<(), Box<dyn error::Error>> {
     let mut buf_reader = BufReader::new(&stream);
     let mut request_line = String::new();
@@ -42,10 +49,18 @@ fn handle_connection(mut stream: TcpStream) -> Result<(), Box<dyn error::Error>>
         }
     }
 
+    let support_gzip = client_accept_gzip(&headers);
+
     match (method.as_str(), path.as_str()) {
         ("GET", path) if path.starts_with("/echo/") => {
             let echo_string = &path[6..];
-            send_response(&mut stream, "200 OK", "text/plain", echo_string)?;
+            send_response_with_encoding(
+                &mut stream,
+                "200 OK",
+                "text/plain",
+                echo_string,
+                support_gzip,
+            )?;
         }
         ("GET", path) if path.starts_with("/files/") => {
             handle_get_file(&mut stream, &path)?;
@@ -55,13 +70,25 @@ fn handle_connection(mut stream: TcpStream) -> Result<(), Box<dyn error::Error>>
         }
         ("GET", "/user-agent") => {
             let user_agent = headers.get("User-Agent").map(String::as_str).unwrap_or("");
-            send_response(&mut stream, "200 OK", "text/plain", user_agent)?;
+            send_response_with_encoding(
+                &mut stream,
+                "200 OK",
+                "text/plain",
+                user_agent,
+                support_gzip,
+            )?;
         }
         ("GET", "/") => {
-            send_response(&mut stream, "200 OK", "text/plain", "")?;
+            send_response_with_encoding(&mut stream, "200 OK", "text/plain", "", support_gzip)?;
         }
         _ => {
-            send_response(&mut stream, "404 Not Found", "text/plain", "404 Not Found")?;
+            send_response_with_encoding(
+                &mut stream,
+                "404 Not Found",
+                "text/plain",
+                "404 Not Found",
+                support_gzip,
+            )?;
         }
     }
     Ok(())
@@ -139,8 +166,29 @@ fn send_response(
         status,
         content_type,
         content.len(),
-        content
+        content,
     );
+
+    stream.write_all(response.as_bytes())?;
+    Ok(())
+}
+
+fn send_response_with_encoding(
+    stream: &mut TcpStream,
+    status: &str,
+    content_type: &str,
+    content: &str,
+    use_gzip: bool,
+) -> Result<(), Box<dyn error::Error>> {
+    let mut response = format!("HTTP/1.1 {}\r\nContent-Type: {}\r\n", status, content_type);
+
+    if use_gzip {
+        response.push_str("Content-Encoding: gzip\r\n");
+    }
+
+    response.push_str(&format!("Content-Length: {}\r\n\r\n", content.len()));
+    response.push_str(content);
+
     stream.write_all(response.as_bytes())?;
     Ok(())
 }
