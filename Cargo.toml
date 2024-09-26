@@ -1,7 +1,7 @@
 [package]
-name = "codecrafters-http-server"
+name = "http-server"
 version = "0.1.0"
-authors = ["Codecrafters <hello@codecrafters.io>"]
+authors = ["Yiyuan Li"]
 edition = "2021"
 rust-version = "1.80"
 
