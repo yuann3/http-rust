@@ -81,7 +81,26 @@ fn handle_connection(mut stream: TcpStream) -> Result<(), Box<dyn error::Error>>
             )?;
         }
         ("GET", "/") => {
-            send_response_with_encoding(&mut stream, "200 OK", "text/plain", "", support_gzip)?;
+            match serve_html_file("src/index.html") {
+                Ok(content) => {
+                    send_response_with_encoding(
+                        &mut stream,
+                        "200 OK",
+                        "text/html",
+                        &content,
+                        support_gzip,
+                    )?;
+                }
+                Err(_) => {
+                    send_response_with_encoding(
+                        &mut stream,
+                        "500 Internal Server Error",
+                        "text/plain",
+                        "Error loading page",
+                        support_gzip,
+                    )?;
+                }
+            }
         }
         _ => {
             send_response_with_encoding(
@@ -199,4 +218,9 @@ fn send_response_with_encoding(
     stream.write_all(response.as_bytes())?;
     stream.write_all(&body)?;
     Ok(())
+}
+
+fn serve_html_file(path: &str) -> Result<String, Box<dyn error::Error>> {
+    let content = fs::read_to_string(path)?;
+    Ok(content)
 }
